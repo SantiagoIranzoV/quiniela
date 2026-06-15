@@ -291,6 +291,21 @@
   .arow .ti input{width:90px;height:30px;font-size:12px;padding:0 8px;border-radius:8px;border:1.5px solid var(--line2);font-family:inherit;background:#fff;color:var(--ink)}
   .arow .si{display:flex;align-items:center;gap:4px}
   .arow .si input{width:38px;height:36px;text-align:center;font-family:"Barlow Condensed";font-size:18px;font-weight:800;border-radius:9px;border:1.5px solid var(--red);background:#fff;color:var(--red)}
+  .otnote{font-size:11px;color:var(--lmut);padding:8px 4px 14px;font-style:italic}
+  .ottable{background:linear-gradient(180deg,#FFFFFF,#F4F7FD);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:4px 0 16px;color:var(--ink)}
+  .othead{background:var(--navy);color:#fff;font-family:"Barlow Condensed";font-weight:800;font-size:13px;letter-spacing:.08em;text-transform:uppercase;padding:8px 12px;display:flex;justify-content:space-between;align-items:center}
+  .othead .otsub{font-size:9px;color:#9FB0D8;font-weight:700;letter-spacing:.04em;text-transform:none}
+  .otrow{display:grid;grid-template-columns:24px 1fr auto auto;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--line);font-size:12.5px}
+  .otrow:last-of-type{border-bottom:none}
+  .otrow.qz{background:var(--gold-tint)}
+  .otrow .otp{font-family:"Barlow Condensed";font-weight:800;color:var(--mut);text-align:center}
+  .otrow.qz .otp{color:var(--goldd)}
+  .otrow .ott{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .otrow .otpts{font-size:10.5px;color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .otrow .otmove{display:flex;gap:3px}
+  .otrow .otmove button{width:24px;height:24px;border-radius:6px;border:1px solid var(--line2);background:#fff;color:var(--navy);font-size:10px;line-height:1;display:flex;align-items:center;justify-content:center}
+  .otrow .otmove button:disabled{opacity:.25}
+  .otreset{margin:8px 12px 12px;padding:6px 12px;border-radius:8px;border:1px solid var(--line2);background:#fff;color:var(--mut);font-size:11px;font-weight:700}
   .arow .si .c{color:var(--red);font-weight:800}
 
   /* reglas (panel claro) */
@@ -751,18 +766,42 @@ function renderRanking(){
 }
 /* ===== ADMIN ===== */
 function renderResultados(){
-  let h=`<p class="lead">Marcadores oficiales. Se guardan al salir del campo. En cruces puedes escribir los equipos.</p>`;
+  let h=`<p class="lead">Marcadores oficiales. Se guardan al salir del campo. En cruces puedes escribir los equipos. Cuando un grupo esté completo, abajo aparece su <b>tabla oficial</b> y podrás reordenar empates a mano.</p>`;
   const byG={};STATE.matches.filter(m=>m.stage==="group").forEach(m=>{(byG[m.group]=byG[m.group]||[]).push(m);});
   Object.keys(byG).sort().forEach(g=>{
     h+=`<div class="ahead"><span class="at">Grupo ${g}</span><span class="ln"></span></div>`;
     byG[g].forEach(m=>h+=aRow(m,false));
+    h+=officialTableHTML(g,byG[g]);
   });
   const byS={};STATE.matches.filter(m=>m.stage!=="group").forEach(m=>{(byS[m.stage]=byS[m.stage]||[]).push(m);});
   STAGE_ORDER.forEach(s=>{if(!byS[s])return;
     h+=`<div class="ahead"><span class="at">${STAGE_NAMES[s]}</span><span class="ln"></span></div>`;
     byS[s].forEach(m=>h+=aRow(m,true));
   });
-  $("#v-resultados").innerHTML=h;wireAdmin();
+  $("#v-resultados").innerHTML=h;wireAdmin();wireGroupOrder();
+}
+// tabla oficial de un grupo (resultados reales) usando el orden que ya calculó el servidor
+function officialTableHTML(g,ms){
+  const complete=ms.every(m=>m.homeScore!=null&&m.awayScore!=null);
+  if(!complete)return `<div class="otnote">La tabla oficial aparecerá cuando los ${ms.length} partidos tengan resultado.</div>`;
+  // el servidor ya devuelve standings[g] ordenado (directo→dg→gf, o el orden manual)
+  const st=(STATE.standings||{})[g]||[];
+  if(st.length<2)return "";
+  // detectar empates a puntos para marcar qué filas se pueden reordenar
+  let h=`<div class="ottable" data-g="${g}"><div class="othead">Tabla oficial · Grupo ${g} <span class="otsub">↑↓ para reordenar empates</span></div>`;
+  st.forEach((r,i)=>{
+    const tiedAdj=(i>0&&st[i-1].pts===r.pts)||(i<st.length-1&&st[i+1].pts===r.pts);
+    const cls=i<2?"qz":"";
+    h+=`<div class="otrow ${cls}" data-team="${esc(r.team)}">
+      <span class="otp">${i+1}</span>
+      <span class="ott">${flag(r.team)} ${name(r.team)}</span>
+      <span class="otpts">${r.pts}p · ${r.dg>0?'+':''}${r.dg} · ${r.gf}gf</span>
+      <span class="otmove">${tiedAdj?`<button class="otup" data-g="${g}" data-i="${i}" ${i===0||st[i-1].pts!==r.pts?'disabled':''}>▲</button><button class="otdn" data-g="${g}" data-i="${i}" ${i===st.length-1||st[i+1].pts!==r.pts?'disabled':''}>▼</button>`:''}</span>
+    </div>`;
+  });
+  const hasManual=(STATE.manualOrders||{})[g];
+  if(hasManual)h+=`<button class="otreset" data-g="${g}">↺ Volver al orden automático</button>`;
+  return h+`</div>`;
 }
 function aRow(m,ko){
   const filled=m.homeScore!=null?"filled":"";
@@ -832,6 +871,26 @@ function liveStanding(mid){
   const done=ms.filter(x=>{const d=DIRTY[x.id],mn=myMap[x.id]||{};return (d&&d.home!=='')||mn.home!=null;}).length;
   const st=$("#v-grupos .phead .st");
   if(st){st.textContent=`${done}/${ms.length}`;st.classList.toggle("full",done===ms.length);}
+}
+function wireGroupOrder(){
+  const saveOrder=async(g,order)=>{
+    try{
+      await api("/api/group-order",{method:"POST",body:JSON.stringify({group:g,order})});
+      toast("Orden del grupo guardado");
+      STATE=await api("/api/state");
+      // repinta solo la vista admin sin saltar; mantén la pestaña
+      renderResultados();renderGrupos();renderEspeciales();renderRanking();
+    }catch(e){toast(e.message);}
+  };
+  const curOrder=g=>((STATE.standings||{})[g]||[]).map(r=>r.team);
+  $$('#v-resultados .otup,#v-resultados .otdn').forEach(btn=>btn.addEventListener('click',()=>{
+    const g=btn.dataset.g, i=+btn.dataset.i, up=btn.classList.contains('otup');
+    const order=curOrder(g); const j=up?i-1:i+1;
+    if(j<0||j>=order.length)return;
+    [order[i],order[j]]=[order[j],order[i]]; // intercambia
+    saveOrder(g,order);
+  }));
+  $$('#v-resultados .otreset').forEach(btn=>btn.addEventListener('click',()=>saveOrder(btn.dataset.g,[])));
 }
 function wireSpecials(){
   $$('input[data-sp]').forEach(inp=>inp.addEventListener('change',async()=>{
