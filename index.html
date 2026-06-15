@@ -497,6 +497,41 @@ function myStandings(ms,myMap){
   return Object.values(tbl).map(r=>({...r,dg:r.gf-r.gc}))
     .sort((x,y)=>y.pts-x.pts||y.dg-x.dg||y.gf-x.gf||name(x.team).localeCompare(name(y.team)));
 }
+// tabla oficial en vivo (admin) con desempate por resultado directo + orden manual.
+// scoreOf(m) devuelve {h,a} o null para cada partido del grupo.
+function liveOfficial(ms,scoreOf,manualOrder){
+  const tbl={};const en=t=>(tbl[t]=tbl[t]||{team:t,pj:0,g:0,e:0,p:0,gf:0,gc:0,pts:0});
+  ms.forEach(m=>{en(m.home);en(m.away);});
+  const played=[];
+  ms.forEach(m=>{const s=scoreOf(m);if(!s)return;played.push({home:m.home,away:m.away,h:s.h,a:s.a});
+    const H=tbl[m.home],A=tbl[m.away];
+    H.pj++;A.pj++;H.gf+=s.h;H.gc+=s.a;A.gf+=s.a;A.gc+=s.h;
+    if(s.h>s.a){H.g++;A.p++;H.pts+=3;}else if(s.h<s.a){A.g++;H.p++;A.pts+=3;}else{H.e++;A.e++;H.pts++;A.pts++;}
+  });
+  const h2h=(teams)=>{const m={};teams.forEach(t=>m[t]={pts:0,gf:0,gc:0});
+    played.forEach(p=>{if(!m[p.home]||!m[p.away])return;const H=m[p.home],A=m[p.away];
+      H.gf+=p.h;H.gc+=p.a;A.gf+=p.a;A.gc+=p.h;
+      if(p.h>p.a)H.pts+=3;else if(p.h<p.a)A.pts+=3;else{H.pts++;A.pts++;}});
+    return m;};
+  let rows=Object.values(tbl).map(r=>({...r,dg:r.gf-r.gc}));
+  rows.sort((a,b)=>{
+    if(b.pts!==a.pts)return b.pts-a.pts;
+    const tied=rows.filter(r=>r.pts===a.pts).map(r=>r.team);
+    if(tied.length>=2&&tied.includes(a.team)&&tied.includes(b.team)){
+      const m=h2h(tied),ha=m[a.team],hb=m[b.team];
+      if(hb.pts!==ha.pts)return hb.pts-ha.pts;
+      const da=ha.gf-ha.gc,db=hb.gf-hb.gc; if(db!==da)return db-da;
+      if(hb.gf!==ha.gf)return hb.gf-ha.gf;
+    }
+    if(b.dg!==a.dg)return b.dg-a.dg; if(b.gf!==a.gf)return b.gf-a.gf;
+    return name(a.team).localeCompare(name(b.team));
+  });
+  if(manualOrder&&manualOrder.length){
+    rows.sort((a,b)=>{const ia=manualOrder.indexOf(a.team),ib=manualOrder.indexOf(b.team);
+      if(ia===-1&&ib===-1)return 0;if(ia===-1)return 1;if(ib===-1)return -1;return ia-ib;});
+  }
+  return rows;
+}
 function standHTML(ms,myMap){
   const st=myStandings(ms,myMap);
   if(!st.some(r=>r.pj>0))return `<div class="stand"><div class="sempty">Escribe tus marcadores y tu tabla aparece aquí.</div></div>`;
@@ -780,27 +815,37 @@ function renderResultados(){
   });
   $("#v-resultados").innerHTML=h;wireAdmin();wireGroupOrder();
 }
-// tabla oficial de un grupo (resultados reales) usando el orden que ya calculó el servidor
+// tabla oficial de un grupo, EN VIVO según los marcadores escritos en pantalla.
+// Lee el valor actual de los inputs del admin (no solo lo guardado), así se actualiza al teclear.
+function adminScoreOf(m){
+  const hi=$(`input[data-adm="${m.id}"][data-side="home"]`), ai=$(`input[data-adm="${m.id}"][data-side="away"]`);
+  let h = hi ? hi.value : (m.homeScore??''); let a = ai ? ai.value : (m.awayScore??'');
+  if(h===''||h==null||a===''||a==null)return null;
+  return {h:+h, a:+a};
+}
 function officialTableHTML(g,ms){
-  const complete=ms.every(m=>m.homeScore!=null&&m.awayScore!=null);
-  if(!complete)return `<div class="otnote">La tabla oficial aparecerá cuando los ${ms.length} partidos tengan resultado.</div>`;
-  // el servidor ya devuelve standings[g] ordenado (directo→dg→gf, o el orden manual)
-  const st=(STATE.standings||{})[g]||[];
-  if(st.length<2)return "";
-  // detectar empates a puntos para marcar qué filas se pueden reordenar
-  let h=`<div class="ottable" data-g="${g}"><div class="othead">Tabla oficial · Grupo ${g} <span class="otsub">↑↓ para reordenar empates</span></div>`;
+  const manual=(STATE.manualOrders||{})[g];
+  const st=liveOfficial(ms,adminScoreOf,manual);
+  const playedCount=ms.filter(m=>adminScoreOf(m)).length;
+  const complete=playedCount===ms.length;
+  let h=`<div class="ottable" data-g="${g}"><div class="othead">Tabla oficial · Grupo ${g}
+      <span class="otsub">${complete?'↑↓ para reordenar empates':playedCount+'/'+ms.length+' jugados'}</span></div>`;
+  if(playedCount===0){
+    h+=`<div class="otnote" style="padding:11px 12px">Escribe los marcadores y la tabla se irá formando aquí.</div></div>`;
+    return h;
+  }
   st.forEach((r,i)=>{
-    const tiedAdj=(i>0&&st[i-1].pts===r.pts)||(i<st.length-1&&st[i+1].pts===r.pts);
+    // las flechas solo cuando el grupo está completo y hay empate a puntos con el vecino
+    const tiedAdj=complete&&((i>0&&st[i-1].pts===r.pts)||(i<st.length-1&&st[i+1].pts===r.pts));
     const cls=i<2?"qz":"";
     h+=`<div class="otrow ${cls}" data-team="${esc(r.team)}">
       <span class="otp">${i+1}</span>
       <span class="ott">${flag(r.team)} ${name(r.team)}</span>
-      <span class="otpts">${r.pts}p · ${r.dg>0?'+':''}${r.dg} · ${r.gf}gf</span>
+      <span class="otpts">${r.pts}p · ${r.pj}pj · ${r.dg>0?'+':''}${r.dg} · ${r.gf}gf</span>
       <span class="otmove">${tiedAdj?`<button class="otup" data-g="${g}" data-i="${i}" ${i===0||st[i-1].pts!==r.pts?'disabled':''}>▲</button><button class="otdn" data-g="${g}" data-i="${i}" ${i===st.length-1||st[i+1].pts!==r.pts?'disabled':''}>▼</button>`:''}</span>
     </div>`;
   });
-  const hasManual=(STATE.manualOrders||{})[g];
-  if(hasManual)h+=`<button class="otreset" data-g="${g}">↺ Volver al orden automático</button>`;
+  if(manual)h+=`<button class="otreset" data-g="${g}">↺ Volver al orden automático</button>`;
   return h+`</div>`;
 }
 function aRow(m,ko){
@@ -872,25 +917,32 @@ function liveStanding(mid){
   const st=$("#v-grupos .phead .st");
   if(st){st.textContent=`${done}/${ms.length}`;st.classList.toggle("full",done===ms.length);}
 }
+let _saveOrderFn=null;
+function rewireGroupOrder(){
+  const saveOrder=_saveOrderFn; if(!saveOrder)return;
+  const curOrder=g=>{
+    const ms=STATE.matches.filter(x=>x.stage==="group"&&x.group===g);
+    return liveOfficial(ms,adminScoreOf,(STATE.manualOrders||{})[g]).map(r=>r.team);
+  };
+  $$('#v-resultados .otup,#v-resultados .otdn').forEach(btn=>btn.onclick=()=>{
+    const g=btn.dataset.g, i=+btn.dataset.i, up=btn.classList.contains('otup');
+    const order=curOrder(g); const j=up?i-1:i+1;
+    if(j<0||j>=order.length)return;
+    [order[i],order[j]]=[order[j],order[i]];
+    saveOrder(g,order);
+  });
+  $$('#v-resultados .otreset').forEach(btn=>btn.onclick=()=>saveOrder(btn.dataset.g,[]));
+}
 function wireGroupOrder(){
-  const saveOrder=async(g,order)=>{
+  _saveOrderFn=async(g,order)=>{
     try{
       await api("/api/group-order",{method:"POST",body:JSON.stringify({group:g,order})});
       toast("Orden del grupo guardado");
       STATE=await api("/api/state");
-      // repinta solo la vista admin sin saltar; mantén la pestaña
       renderResultados();renderGrupos();renderEspeciales();renderRanking();
     }catch(e){toast(e.message);}
   };
-  const curOrder=g=>((STATE.standings||{})[g]||[]).map(r=>r.team);
-  $$('#v-resultados .otup,#v-resultados .otdn').forEach(btn=>btn.addEventListener('click',()=>{
-    const g=btn.dataset.g, i=+btn.dataset.i, up=btn.classList.contains('otup');
-    const order=curOrder(g); const j=up?i-1:i+1;
-    if(j<0||j>=order.length)return;
-    [order[i],order[j]]=[order[j],order[i]]; // intercambia
-    saveOrder(g,order);
-  }));
-  $$('#v-resultados .otreset').forEach(btn=>btn.addEventListener('click',()=>saveOrder(btn.dataset.g,[])));
+  rewireGroupOrder();
 }
 function wireSpecials(){
   $$('input[data-sp]').forEach(inp=>inp.addEventListener('change',async()=>{
@@ -925,7 +977,19 @@ function wireAdmin(){
       toast("Resultado guardado");
     }catch(e){toast(e.message);}
   };
-  $$('input[data-adm]').forEach(i=>i.addEventListener('change',()=>send(+i.dataset.adm,i)));
+  // repinta la tabla oficial de un grupo en vivo (mientras se escribe), sin tocar el resto
+  const refreshTable=(g)=>{
+    const old=$(`#v-resultados .ottable[data-g="${g}"]`); if(!old)return;
+    const ms=STATE.matches.filter(x=>x.stage==="group"&&x.group===g);
+    const tmp=document.createElement("div"); tmp.innerHTML=officialTableHTML(g,ms);
+    old.replaceWith(tmp.firstElementChild);
+    rewireGroupOrder(); // re-engancha flechas/reset de la tabla repintada
+  };
+  const groupOf=mid=>{const m=STATE.matches.find(x=>x.id===mid);return m&&m.stage==="group"?m.group:null;};
+  $$('input[data-adm]').forEach(i=>{
+    i.addEventListener('input',()=>{const g=groupOf(+i.dataset.adm);if(g)refreshTable(g);}); // en vivo al teclear
+    i.addEventListener('change',()=>send(+i.dataset.adm,i)); // guarda al salir del campo
+  });
   $$('input[data-team]').forEach(i=>i.addEventListener('change',()=>send(+i.dataset.team,i)));
 }
 function scheduleSave(){clearTimeout(SAVE_TIMER);SAVE_TIMER=setTimeout(saveAll,800);}
