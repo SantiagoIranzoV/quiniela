@@ -408,9 +408,33 @@ const STAGE_ORDER=["R32","R16","QF","SF","TP","FN"];
 let STATE=null, DIRTY={}, SAVE_TIMER=null, GSEL=null, SSEL=null, VIEW="grupos", OPEN=new Set(), ADMIN_DIRTY=false;
 const $=(s,el=document)=>el.querySelector(s);
 const $$=(s,el=document)=>[...el.querySelectorAll(s)];
-const flag=t=>FLAGS[t]||"⚽";
-const name=t=>NAMES[t]||t;
-const ab=t=>ABBRS[t]||t.slice(0,3).toUpperCase();
+// Índice de búsqueda: resuelve un equipo escrito de cualquier forma
+// (español, inglés, código FIFA, minúsculas, sin acentos) a su clave canónica en inglés.
+const norm=s=>String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
+const TEAM_INDEX=(()=>{
+  const idx={};
+  Object.keys(FLAGS).forEach(canon=>{
+    idx[norm(canon)]=canon;                 // inglés: "germany"
+    if(NAMES[canon])idx[norm(NAMES[canon])]=canon; // español: "alemania"
+    if(ABBRS[canon])idx[norm(ABBRS[canon])]=canon; // código FIFA: "ger"
+  });
+  // alias frecuentes que el admin podría teclear distinto
+  const alias={"alemania":"Germany","espana":"Spain","estadosunidos":"United States","eeuu":"United States","usa":"United States",
+    "paisesbajos":"Netherlands","holanda":"Netherlands","corea":"Korea Republic","coreadelsur":"Korea Republic",
+    "rdcongo":"DR Congo","congo":"DR Congo","costademarfil":"Ivory Coast","marfil":"Ivory Coast",
+    "arabiasaudi":"Saudi Arabia","arabia":"Saudi Arabia","sudafrica":"South Africa","chequia":"Czechia","republicacheca":"Czechia",
+    "turquia":"Turkiye","caboverde":"Cape Verde","nuevazelanda":"New Zealand","bosnia":"Bosnia and Herzegovina","catar":"Qatar","qatar":"Qatar"};
+  Object.entries(alias).forEach(([k,v])=>{if(FLAGS[v])idx[norm(k)]=v;});
+  return idx;
+})();
+const resolveTeam=t=>{
+  if(t==null)return "";
+  if(FLAGS[t])return t;            // ya es la clave canónica
+  return TEAM_INDEX[norm(t)]||t;   // intenta resolver; si no, deja lo escrito
+};
+const flag=t=>FLAGS[resolveTeam(t)]||"⚽";
+const name=t=>{const c=resolveTeam(t);return NAMES[c]||c;};
+const ab=t=>{const c=resolveTeam(t);return ABBRS[c]||String(c).slice(0,3).toUpperCase();};
 const esc=s=>String(s).replace(/"/g,'&quot;');
 const ini=n=>n.split(/\s+/).map(w=>w[0]).join("").slice(0,2).toUpperCase();
 function toast(m){const t=$("#toast");t.textContent=m;t.classList.add("show");clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove("show"),2200);}
@@ -455,6 +479,7 @@ async function boot(){
   DIRTY={};renderAll();updateSavebar();
   startLockTimer();
 }
+function show(app){$("#login").classList.toggle("hidden",app);$("#app").classList.toggle("hidden",!app);}
 // Recalcula m.locked y specialsLocked comparando el kickoff con la hora actual.
 // Devuelve true si algo cambió de estado (para repintar).
 function applyLocks(){
@@ -885,7 +910,7 @@ function officialTableHTML(g,ms){
 function aRow(m,ko){
   const filled=m.homeScore!=null?"filled":"";
   const nm=ko
-    ?`<div class="ti"><input data-team="${m.id}" data-side="home" value="${m.home==='Por definir'?'':esc(m.home)}" placeholder="Local"><input data-team="${m.id}" data-side="away" value="${m.away==='Por definir'?'':esc(m.away)}" placeholder="Visitante"></div>`
+    ?`<div class="ti"><input data-team="${m.id}" data-side="home" value="${m.home==='Por definir'?'':esc(name(m.home))}" placeholder="Local"><input data-team="${m.id}" data-side="away" value="${m.away==='Por definir'?'':esc(name(m.away))}" placeholder="Visitante"></div>`
     :`<div class="anm"><div class="t">${flag(m.home)} ${name(m.home)} – ${name(m.away)} ${flag(m.away)}</div><div class="k">${fmtKick(m.kickoff)}</div></div>`;
   return `<div class="arow ${filled}">${nm}<div class="si">
     <input inputmode="numeric" maxlength="2" data-adm="${m.id}" data-side="home" value="${m.homeScore??''}">
@@ -994,7 +1019,13 @@ function wireAdmin(){
     const away=$(`input[data-adm="${mid}"][data-side="away"]`).value;
     const tH=$(`input[data-team="${mid}"][data-side="home"]`),tA=$(`input[data-team="${mid}"][data-side="away"]`);
     const body={matchId:mid,home,away};
-    if(tH&&tA){body.homeTeam=tH.value||"Por definir";body.awayTeam=tA.value||"Por definir";}
+    if(tH&&tA){
+      // guarda la clave canónica (ej. "Germany") aunque el admin escriba "Alemania",
+      // así banderas, abreviaturas y tablas funcionan en toda la app
+      const canon=v=>{const r=resolveTeam(v.trim());return r||v.trim();};
+      body.homeTeam=tH.value.trim()?canon(tH.value):"Por definir";
+      body.awayTeam=tA.value.trim()?canon(tA.value):"Por definir";
+    }
     try{
       await api("/api/result",{method:"POST",body:JSON.stringify(body)});
       // actualizar SOLO el estado en memoria, sin repintar ni mover el scroll
