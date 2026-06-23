@@ -451,9 +451,43 @@ async function boot(){
     GSEL=gs.find(g=>STATE.matches.some(m=>m.stage==="group"&&m.group===g&&!m.locked&&!myMap[m.id]))||gs[0];
   }
   if(!SSEL)SSEL="R32";
+  applyLocks(); // marca como bloqueados los partidos ya empezados según el reloj
   DIRTY={};renderAll();updateSavebar();
+  startLockTimer();
 }
-function show(app){$("#login").classList.toggle("hidden",app);$("#app").classList.toggle("hidden",!app);}
+// Recalcula m.locked y specialsLocked comparando el kickoff con la hora actual.
+// Devuelve true si algo cambió de estado (para repintar).
+function applyLocks(){
+  const now=Date.now();
+  let changed=false;
+  (STATE.matches||[]).forEach(m=>{
+    const shouldLock=new Date(m.kickoff).getTime()<=now;
+    if(shouldLock&&!m.locked){m.locked=true;changed=true;}
+  });
+  // especiales: se cierran cuando empieza el primer partido
+  if(!STATE.specialsLocked&&STATE.firstKickoff&&new Date(STATE.firstKickoff).getTime()<=now){
+    STATE.specialsLocked=true;changed=true;
+  }
+  return changed;
+}
+let LOCK_TIMER=null;
+function startLockTimer(){
+  clearInterval(LOCK_TIMER);
+  LOCK_TIMER=setInterval(()=>{
+    if(!STATE)return;
+    if(applyLocks()){
+      // algo se acaba de bloquear: descarta ediciones de esos partidos y repinta
+      Object.keys(DIRTY).forEach(mid=>{
+        const m=STATE.matches.find(x=>x.id===+mid);
+        if(m&&m.locked)delete DIRTY[mid];
+      });
+      updateSavebar();
+      // repinta las vistas que muestran partidos editables
+      renderHoy();renderGrupos();renderCruces();renderEspeciales();
+      toast("Un partido ha comenzado: pronósticos bloqueados");
+    }
+  },30000); // cada 30 s
+}
 function renderAll(){renderHoy();renderGrupos();renderCruces();renderPicks();renderEspeciales();renderRanking();renderReglas();if(STATE.user.isAdmin)renderResultados();}
 function go(v){
   const wasAdmin=VIEW==="resultados";
@@ -1011,6 +1045,13 @@ async function saveAll(){
     if(VIEW==="grupos")renderGrupos();
   }catch(e){$("#saveStatus").textContent=e.message;toast(e.message);}
 }
+// al volver a la app (móvil desde segundo plano), recalcula bloqueos al momento
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible"&&STATE&&applyLocks()){
+    Object.keys(DIRTY).forEach(mid=>{const m=STATE.matches.find(x=>x.id===+mid);if(m&&m.locked)delete DIRTY[mid];});
+    updateSavebar();renderHoy();renderGrupos();renderCruces();renderEspeciales();
+  }
+});
 boot();
 </script>
 </body>
